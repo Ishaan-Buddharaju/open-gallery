@@ -1,1 +1,1 @@
-# galley-wall
+# gallery-wall
