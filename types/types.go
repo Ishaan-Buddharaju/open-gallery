@@ -1,11 +1,9 @@
 package types
 
-import "fmt"
-
 /* Submission represents a single submission from any of the "SourceSystem."
  * The fields contain references to image source locations and submission related metadata.
  */
-type Submission struct = {
+type Submission struct {
 	SubmissionAuthor string
 	SubmissionContactDetails string
 	SourceSystem SourceSystem
@@ -30,11 +28,12 @@ const (
 
 func (s SourceSystem) String() string {
 	switch s {
-		case SourceUnkown: return "Unknown"
+		case SourceUnknown: return "Unknown"
 		case SourceWeb: return "Web"
 		case SourceEmail: return "Email"
 		case SourceSms: return "SMS"
 	}
+	return "Unknown"
 }
 
 /* SubmissionStatus is an enum representing the status states
@@ -62,4 +61,5 @@ func (s SubmissionStatus) String() string {
 		case SubmissionModerationAccepted: return "Moderation Accepted"
 		case SubmissionComplete: return "Complete"
 	}
+	return "Unknown Failure"
 }
