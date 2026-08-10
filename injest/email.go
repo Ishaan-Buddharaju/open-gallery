@@ -1,18 +1,20 @@
 package injest
 
 import (
-	"fmt"
-	"os"
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
-	"encoding/json"
+	"os"
+
+	"cloud.google.com/go/pubsub/v2"
+	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
+	"github.com/Ishaan-Buddharaju/open-gallery/types"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/gmail/v1"
 	"google.golang.org/api/option"
-	"cloud.google.com/go/pubsub/v2"
-	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -35,10 +37,10 @@ func SetupPubSubClient(ctx context.Context, projectID string, topicName string, 
 
 	subPath := fmt.Sprintf("projects/%s/subscriptions/%s", projectID, subName)
 	pbSubscription := &pubsubpb.Subscription{
-		Name: subPath,
-		Topic: topicPath,
-		AckDeadlineSeconds: 30,
-		RetainAckedMessages: false,
+		Name:                      subPath,
+		Topic:                     topicPath,
+		AckDeadlineSeconds:        30,
+		RetainAckedMessages:       false,
 		EnableExactlyOnceDelivery: false,
 	}
 	_, err = client.SubscriptionAdminClient.CreateSubscription(ctx, pbSubscription)
@@ -47,7 +49,7 @@ func SetupPubSubClient(ctx context.Context, projectID string, topicName string, 
 	}
 
 	sub := client.Subscriber(subPath)
-	if err != nil {
+	if err != nil && !IsAlreadyExists(err) {
 		return nil, fmt.Errorf("failed to initialize subscriber runtime: %w", err)
 	}
 
@@ -57,12 +59,110 @@ func SetupPubSubClient(ctx context.Context, projectID string, topicName string, 
 	return sub, nil
 }
 
+func WatchTopic(ctx context.Context, gmailClient *gmail.Service, projectID string, topicName string) (*gmail.WatchResponse, error) {
+	topicName = "projects/" + projectID + "/topics/" + topicName
+	watchReq := gmailClient.Users.Watch("me", &gmail.WatchRequest{
+		LabelIds:  []string{},
+		TopicName: topicName,
+	})
+	watchResp, err := watchReq.Do()
+	if err != nil {
+		log.Printf("Failed to subscribe to Gmail: %v", err)
+		return nil, err
+	}
+	return watchResp, nil
+}
+
 func IsAlreadyExists(err error) bool {
 	if err == nil {
 		return false
 	}
 	st, ok := status.FromError(err)
 	return ok && st.Code() == codes.AlreadyExists
+}
+
+func ReceiveGmailNotifications(ctx context.Context, subClient *pubsub.Subscriber, srv *gmail.Service, store *types.CursorStore) error {
+	handler := func(ctx context.Context, msg *pubsub.Message) {
+		var n types.GmailNotification
+		if err := json.Unmarshal(msg.Data, &n); err != nil {
+			log.Printf("unparseable payload %q: %v", msg.Data, err)
+			msg.Ack()
+			return
+		}
+		if err := process(ctx, srv, store, n); err != nil {
+			log.Printf("process failed (historyId=%d): %v", n.HistoryId, err)
+			msg.Nack()
+			return
+		}
+		msg.Ack()
+	}
+
+	return subClient.Receive(ctx, handler)
+}
+
+func handler(ctx context.Context, msg *pubsub.Message) {
+
+	var n types.GmailNotification
+	if err := json.Unmarshal(msg.Data, &n); err != nil {
+		msg.Ack() // permanent failure — never going to parse
+		return
+	}
+
+	// if err := process(ctx, n); err != nil {
+	// 	msg.Nack() // transient — Gmail 503, network blip
+	// 	return
+	// }
+
+	msg.Ack() // success
+}
+
+func process(ctx context.Context, srv *gmail.Service, store *types.CursorStore, n types.GmailNotification) error {
+	start := store.Get() // last historyId you SUCCESSFULLY processed
+
+	if start == 0 {
+		// no cursor yet — nothing to diff against.
+		// adopt the current position and wait for the next event.
+		store.Set(n.HistoryId)
+		return nil
+	}
+
+	var latest uint64 = start
+
+	err := srv.Users.History.List("me").
+		StartHistoryId(start).
+		HistoryTypes("messageAdded").
+		Context(ctx).
+		Pages(ctx, func(page *gmail.ListHistoryResponse) error {
+			for _, h := range page.History {
+				for _, added := range h.MessagesAdded {
+					if err := handleNewMessage(ctx, srv, added.Message.Id); err != nil {
+						return err
+					}
+				}
+			}
+			if page.HistoryId > latest {
+				latest = page.HistoryId
+			}
+			return nil
+		})
+	if err != nil {
+		return err // caller Nacks, cursor unmoved, safe to retry
+	}
+
+	store.Set(latest)
+	return nil
+}
+
+func handleNewMessage(ctx context.Context, srv *gmail.Service, id string) error {
+	msg, err := srv.Users.Messages.Get("me", id).Format("full").Context(ctx).Do()
+	if err != nil {
+		return err
+	}
+
+	// ── your logic goes here ──
+	// e.g. pull attachments, index the body, write a DB row
+	log.Printf("%s: %s", id, msg.Snippet)
+	return nil
 }
 
 func SetupOauthClient(ctx context.Context, credsFile string, tokenFile string) (*gmail.Service, error) {

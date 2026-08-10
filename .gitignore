@@ -31,3 +31,5 @@ token.json
 # Editor/IDE
 # .idea/
 # .vscode/
+
+/persist/*
