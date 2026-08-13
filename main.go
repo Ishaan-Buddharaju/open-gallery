@@ -14,6 +14,8 @@ import (
 	"google.golang.org/api/gmail/v1"
 )
 
+//TODODODODODO Add cursor syncing
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(),
 		os.Interrupt, syscall.SIGTERM)

@@ -174,7 +174,7 @@ func WatchTopic(ctx context.Context, gmailClient *gmail.Service, projectID strin
 	topicName = "projects/" + projectID + "/topics/" + topicName
 	watchReq := gmailClient.Users.Watch("me", &gmail.WatchRequest{
 		LabelIds:            []string{"INBOX"},
-		LabelFilterBehavior: "include",
+		LabelFilterBehavior: "INCLUDE",
 		TopicName:           topicName,
 	})
 
@@ -206,6 +206,7 @@ func ReceiveGmailNotifications(ctx context.Context, subClient *pubsub.Subscriber
 			return
 		}
 		n.ReceivedAt = msg.PublishTime
+		log.Printf("Received notification (historyId=%d)", n.HistoryId)
 		if err := process(ctx, srv, n); err != nil {
 			log.Printf("process failed (historyId=%d): %v", n.HistoryId, err)
 			msg.Nack()
@@ -213,12 +214,13 @@ func ReceiveGmailNotifications(ctx context.Context, subClient *pubsub.Subscriber
 		}
 		msg.Ack()
 	}
-
+	log.Printf("Recieving Gmail notifications now")
 	return subClient.Receive(ctx, handler)
 }
 
 func process(ctx context.Context, srv *gmail.Service, n types.GmailNotification) error {
 	newMessages, err := listNewMessages(ctx, srv, n.HistoryId)
+	log.Printf("Found %d new messages in processing", len(newMessages))
 	if err != nil {
 		return err
 	}
@@ -250,6 +252,7 @@ func listNewMessages(ctx context.Context, gmailService *gmail.Service, historyID
 		StartHistoryId(historyID).
 		HistoryTypes("messageAdded")
 	result, err := req.Do()
+	log.Printf("History result: %v", result)
 	if err != nil {
 		return nil, err
 	}
@@ -257,9 +260,9 @@ func listNewMessages(ctx context.Context, gmailService *gmail.Service, historyID
 	for _, h := range result.History {
 		for _, m := range h.Messages {
 			newMessages = append(newMessages, m)
+			log.Printf("Found message %s", m.Id)
 		}
 	}
-
 	return newMessages, nil
 
 }
