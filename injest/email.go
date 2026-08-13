@@ -258,6 +258,7 @@ func listNewMessages(ctx context.Context, gmailService *gmail.Service, historyID
 	}
 	var newMessages []*gmail.Message
 	for _, h := range result.History {
+
 		for _, m := range h.Messages {
 			newMessages = append(newMessages, m)
 			log.Printf("Found message %s", m.Id)

@@ -8,7 +8,7 @@ import (
 )
 
 func SubmitGmailNotification(db *sql.DB, notification types.GmailNotification) (sql.Result, error) {
-	result, err := db.Exec("INSERT INTO EMAIL_NOTIFICATIONS (email, recieved_timestamp, historyID) VALUES (?, ?, ?)",
+	result, err := db.Exec("INSERT INTO EMAIL_NOTIFICATIONS (email, received_timestamp, historyID) VALUES (?, ?, ?)",
 		notification.EmailAddress, notification.ReceivedAt, notification.HistoryId)
 	if err != nil {
 		return nil, err

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Ishaan-Buddharaju/open-gallery/injest"
+	"github.com/Ishaan-Buddharaju/open-gallery/storage"
 	"github.com/joho/godotenv"
 	"google.golang.org/api/gmail/v1"
 )
@@ -59,9 +60,16 @@ func main() {
 		}
 	}()
 
+	//Setup database
+	db, err := storage.Open("data/opengallery.db")
 	if err != nil {
-		log.Fatalf("Failed to create cursor store: %v", err)
+		log.Fatalf("Failed to open database: %v", err)
 	}
+	var mode string
+	db.QueryRow("PRAGMA journal_mode").Scan(&mode)
+	log.Printf("db=%s journal_mode=%s", "opengallery", mode)
+	defer db.Close()
+
 	err = injest.ReceiveGmailNotifications(ctx, subClient, gmailClient)
 	if err != nil {
 		log.Fatalf("Failed to receive Gmail notifications: %v", err)
