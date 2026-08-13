@@ -1,12 +1,7 @@
 package types
 
 import (
-	"errors"
-	"fmt"
-	"os"
-	"strconv"
-	"strings"
-	"sync"
+	"time"
 )
 
 /* Submission represents a single submission from any of the "SourceSystem."
@@ -85,40 +80,14 @@ func (s SubmissionStatus) String() string {
 }
 
 type GmailNotification struct {
-	EmailAddress string `json:"emailAddress"`
-	HistoryId    uint64 `json:"historyId"`
+	EmailAddress string    `json:"emailAddress"`
+	HistoryId    uint64    `json:"historyId"`
+	ReceivedAt   time.Time `json:"timestamp"`
 }
 
-type CursorStore struct {
-	mu   sync.Mutex
-	path string
-	id   uint64
-}
-
-func (c *CursorStore) Get() uint64 { c.mu.Lock(); defer c.mu.Unlock(); return c.id }
-
-func (c *CursorStore) Set(id uint64) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.id = id
-	return os.WriteFile(c.path, []byte(strconv.FormatUint(id, 10)), 0600)
-}
-
-func NewCursorStore(path string) (*CursorStore, error) {
-	c := &CursorStore{path: path}
-
-	b, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return c, nil // first run, id stays 0
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	id, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("corrupt cursor file %s: %w", path, err)
-	}
-	c.id = id
-	return c, nil
-}
+// type ExtractedEmail struct {
+// 	SenderAddress string       `json:"senderAddress"`
+// 	Subject       string       `json:"subject"`
+// 	Body          string       `json:"body"`
+// 	Attachments   []Attachment `json:"attachments"`
+// }

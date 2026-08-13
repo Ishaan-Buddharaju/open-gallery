@@ -5,16 +5,19 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/Ishaan-Buddharaju/open-gallery/injest"
-	"github.com/Ishaan-Buddharaju/open-gallery/types"
 	"github.com/joho/godotenv"
 	"google.golang.org/api/gmail/v1"
 )
 
 func main() {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(),
+		os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	var (
 		gmailClient *gmail.Service
@@ -24,33 +27,6 @@ func main() {
 	if err != nil {
 		fmt.Printf("Error on OauthSetup: %v", err)
 	}
-	result, err := injest.FetchInbox(gmailClient, "")
-	if err != nil {
-		fmt.Printf("Error on inbox fetch: %v", err)
-	}
-	fmt.Printf("Raw Response Struct:\n%+v\n", result)
-
-	// for _, msgSummary := range result.Messages {
-	// 	// Fetch the full details for this specific message ID
-	// 	msg, err := gmailService.Users.Messages.Get("me", msgSummary.Id).Format("full").Do()
-	// 	if err != nil {
-	// 		fmt.Printf("Unable to retrieve message %s: %v", msgSummary.Id, err)
-	// 		continue
-	// 	}
-	// 	fmt.Println("----------------------------------------")
-	// 	fmt.Printf("Message ID: %s\n", msg.Id)
-	// 	fmt.Printf("Snippet:    %s\n", msg.Snippet) // Brief preview of text
-
-	// 	// Extract the Subject from the headers block
-	// 	for _, header := range msg.Payload.Headers {
-	// 		if header.Name == "Subject" {
-	// 			fmt.Printf("Subject:    %s\n", header.Value)
-	// 		}
-	// 		if header.Name == "From" {
-	// 			fmt.Printf("From:       %s\n", header.Value)
-	// 		}
-	// 	}
-	// }
 
 	err = godotenv.Load()
 	if err != nil {
@@ -81,11 +57,10 @@ func main() {
 		}
 	}()
 
-	store, err := types.NewCursorStore(os.Getenv("CursorStorePath"))
 	if err != nil {
 		log.Fatalf("Failed to create cursor store: %v", err)
 	}
-	err = injest.ReceiveGmailNotifications(ctx, subClient, gmailClient, store)
+	err = injest.ReceiveGmailNotifications(ctx, subClient, gmailClient)
 	if err != nil {
 		log.Fatalf("Failed to receive Gmail notifications: %v", err)
 	} else {

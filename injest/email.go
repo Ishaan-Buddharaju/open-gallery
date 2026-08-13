@@ -128,7 +128,7 @@ func saveToken(path string, token *oauth2.Token) {
 	json.NewEncoder(f).Encode(token)
 }
 
-/* PubSub Helpers */
+/* PubSub Setup Helpers */
 
 func SetupPubSubClient(ctx context.Context, projectID string, topicName string, subName string) (*pubsub.Subscriber, error) {
 	// TODO check restart logic in main to gracefully handle shutdown and webhook
@@ -173,9 +173,11 @@ func SetupPubSubClient(ctx context.Context, projectID string, topicName string, 
 func WatchTopic(ctx context.Context, gmailClient *gmail.Service, projectID string, topicName string) (*gmail.WatchResponse, error) {
 	topicName = "projects/" + projectID + "/topics/" + topicName
 	watchReq := gmailClient.Users.Watch("me", &gmail.WatchRequest{
-		LabelIds:  []string{},
-		TopicName: topicName,
+		LabelIds:            []string{"INBOX"},
+		LabelFilterBehavior: "include",
+		TopicName:           topicName,
 	})
+
 	watchResp, err := watchReq.Do()
 	if err != nil {
 		log.Printf("Failed to subscribe to Gmail: %v", err)
@@ -194,15 +196,17 @@ func IsAlreadyExists(err error) bool {
 
 /* Notification Processing from PubSub */
 
-func ReceiveGmailNotifications(ctx context.Context, subClient *pubsub.Subscriber, srv *gmail.Service, store *types.CursorStore) error {
+func ReceiveGmailNotifications(ctx context.Context, subClient *pubsub.Subscriber, srv *gmail.Service) error {
 	handler := func(ctx context.Context, msg *pubsub.Message) {
 		var n types.GmailNotification
 		if err := json.Unmarshal(msg.Data, &n); err != nil {
 			log.Printf("unparseable payload %q: %v", msg.Data, err)
+
 			msg.Ack()
 			return
 		}
-		if err := process(ctx, srv, store, n); err != nil {
+		n.ReceivedAt = msg.PublishTime
+		if err := process(ctx, srv, n); err != nil {
 			log.Printf("process failed (historyId=%d): %v", n.HistoryId, err)
 			msg.Nack()
 			return
@@ -213,83 +217,58 @@ func ReceiveGmailNotifications(ctx context.Context, subClient *pubsub.Subscriber
 	return subClient.Receive(ctx, handler)
 }
 
-func handler(ctx context.Context, msg *pubsub.Message) {
-
-	var n types.GmailNotification
-	if err := json.Unmarshal(msg.Data, &n); err != nil {
-		msg.Ack() // permanent failure — never going to parse
-		return
-	}
-
-	// if err := process(ctx, n); err != nil {
-	// 	msg.Nack() // transient — Gmail 503, network blip
-	// 	return
-	// }
-
-	msg.Ack() // success
-}
-
-func process(ctx context.Context, srv *gmail.Service, store *types.CursorStore, n types.GmailNotification) error {
-	start := store.Get() // last historyId you SUCCESSFULLY processed
-
-	if start == 0 {
-		// no cursor yet — nothing to diff against.
-		// adopt the current position and wait for the next event.
-		store.Set(n.HistoryId)
-		return nil
-	}
-
-	var latest uint64 = start
-
-	err := srv.Users.History.List("me").
-		StartHistoryId(start).
-		HistoryTypes("messageAdded").
-		Context(ctx).
-		Pages(ctx, func(page *gmail.ListHistoryResponse) error {
-			for _, h := range page.History {
-				for _, added := range h.MessagesAdded {
-					if err := handleNewMessage(ctx, srv, added.Message.Id); err != nil {
-						return err
-					}
-				}
-			}
-			if page.HistoryId > latest {
-				latest = page.HistoryId
-			}
-			return nil
-		})
+func process(ctx context.Context, srv *gmail.Service, n types.GmailNotification) error {
+	newMessages, err := listNewMessages(ctx, srv, n.HistoryId)
 	if err != nil {
-		return err // caller Nacks, cursor unmoved, safe to retry
+		return err
 	}
-
-	store.Set(latest)
+	for _, msg := range newMessages {
+		fmt.Println(msg)
+	}
 	return nil
 }
 
 /* Notification Processing after PubSub notification */
 
-func ProcessNotification(ctx context.Context, srv *gmail.Service, history string) error {
+// func ProcessNotification(ctx context.Context, srv *gmail.Service, history string) error {
+// TODO
+// }
 
-}
+// func handleNewMessage(ctx context.Context, srv *gmail.Service, id string) error {
+// 	msg, err := srv.Users.Messages.Get("me", id).Format("full").Context(ctx).Do()
+// 	if err != nil {
+// 		return err
+// 	}
+//
+// 	log.Printf("%s: %s", id, msg.Snippet)
+// 	return nil
+// }
 
-func handleNewMessage(ctx context.Context, srv *gmail.Service, id string) error {
-	msg, err := srv.Users.Messages.Get("me", id).Format("full").Context(ctx).Do()
+// // TODO Add Oauth Device flow for the projector to setup the source inbox plus filters
+func listNewMessages(ctx context.Context, gmailService *gmail.Service, historyID uint64) ([]*gmail.Message, error) {
+	var req *gmail.UsersHistoryListCall = gmailService.Users.History.List("me").
+		StartHistoryId(historyID).
+		HistoryTypes("messageAdded")
+	result, err := req.Do()
 	if err != nil {
-		return err
+		return nil, err
+	}
+	var newMessages []*gmail.Message
+	for _, h := range result.History {
+		for _, m := range h.Messages {
+			newMessages = append(newMessages, m)
+		}
 	}
 
-	// ── your logic goes here ──
-	// e.g. pull attachments, index the body, write a DB row
-	log.Printf("%s: %s", id, msg.Snippet)
-	return nil
+	return newMessages, nil
+
 }
 
-// TODO Add Oauth Device flow for the projector to setup the source inbox plus filters
-func FetchInbox(gmailService *gmail.Service, query string) (*gmail.ListMessagesResponse, error) {
-	var req *gmail.UsersMessagesListCall = gmailService.Users.Messages.List("me")
-	if query != "" {
-		req.Q(query)
-	}
+// func processNewMessages(ctx context.Context, srv *gmail.Service, newMessages []*gmail.Message) (error) {
 
-	return req.Do()
-}
+// }
+
+// func processMessage(ctx context.Context, srv *gmail.Service, msg *gmail.Message) error {
+// 	var payload *gmail.MessagePart = msg.Payload
+
+// }
