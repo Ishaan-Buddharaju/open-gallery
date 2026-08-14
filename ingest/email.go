@@ -1,7 +1,8 @@
-package injest
+package ingest
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,6 +11,7 @@ import (
 
 	"cloud.google.com/go/pubsub/v2"
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
+	"github.com/Ishaan-Buddharaju/open-gallery/storage"
 	"github.com/Ishaan-Buddharaju/open-gallery/types"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -196,7 +198,7 @@ func IsAlreadyExists(err error) bool {
 
 /* Notification Processing from PubSub */
 
-func ReceiveGmailNotifications(ctx context.Context, subClient *pubsub.Subscriber, srv *gmail.Service) error {
+func ReceiveGmailNotifications(ctx context.Context, subClient *pubsub.Subscriber, srv *gmail.Service, db *sql.DB) error {
 	handler := func(ctx context.Context, msg *pubsub.Message) {
 		var n types.GmailNotification
 		if err := json.Unmarshal(msg.Data, &n); err != nil {
@@ -206,8 +208,13 @@ func ReceiveGmailNotifications(ctx context.Context, subClient *pubsub.Subscriber
 			return
 		}
 		n.ReceivedAt = msg.PublishTime
+		// _, err := storage.SubmitGmailNotification(ctx, db, n)
+		// if err != nil {
+		// 	log.Printf("SubmitGmailNotification failed: %v", err)
+		// }
+
 		log.Printf("Received notification (historyId=%d)", n.HistoryId)
-		if err := process(ctx, srv, n); err != nil {
+		if err := process(ctx, srv, n, db); err != nil {
 			log.Printf("process failed (historyId=%d): %v", n.HistoryId, err)
 			msg.Nack()
 			return
@@ -218,15 +225,38 @@ func ReceiveGmailNotifications(ctx context.Context, subClient *pubsub.Subscriber
 	return subClient.Receive(ctx, handler)
 }
 
-func process(ctx context.Context, srv *gmail.Service, n types.GmailNotification) error {
-	newMessages, err := listNewMessages(ctx, srv, n.HistoryId)
+func process(ctx context.Context, srv *gmail.Service, n types.GmailNotification, db *sql.DB) error {
+	var cursor uint64
+	var err error
+	cursor, err = storage.GetCursor(db, "gmail")
+	if err != nil {
+		log.Printf("GetCursor failed: %v", err)
+		return err
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		log.Printf("Begin failed: %v", err)
+		return err
+	}
+	defer tx.Rollback()
+
+	newMessages, err := listNewMessages(srv, cursor)
 	log.Printf("Found %d new messages in processing", len(newMessages))
 	if err != nil {
+		log.Printf("listNewMessages failed: %v", err)
 		return err
 	}
 	for _, msg := range newMessages {
 		fmt.Println(msg)
 	}
+	err = storage.UpdateCursor(tx, "gmail", n.HistoryId)
+
+	if err != nil {
+		log.Printf("UpdateCursor failed: %v", err)
+		return err
+	}
+
 	return nil
 }
 
@@ -247,7 +277,7 @@ func process(ctx context.Context, srv *gmail.Service, n types.GmailNotification)
 // }
 
 // // TODO Add Oauth Device flow for the projector to setup the source inbox plus filters
-func listNewMessages(ctx context.Context, gmailService *gmail.Service, historyID uint64) ([]*gmail.Message, error) {
+func listNewMessages(gmailService *gmail.Service, historyID uint64) ([]*gmail.Message, error) {
 	var req *gmail.UsersHistoryListCall = gmailService.Users.History.List("me").
 		StartHistoryId(historyID).
 		HistoryTypes("messageAdded")

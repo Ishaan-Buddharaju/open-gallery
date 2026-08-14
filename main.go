@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Ishaan-Buddharaju/open-gallery/injest"
+	ingest "github.com/Ishaan-Buddharaju/open-gallery/ingest"
 	"github.com/Ishaan-Buddharaju/open-gallery/storage"
 	"github.com/joho/godotenv"
 	"google.golang.org/api/gmail/v1"
@@ -26,7 +26,7 @@ func main() {
 		gmailClient *gmail.Service
 		err         error
 	)
-	gmailClient, err = injest.SetupOauthClient(ctx, "credentials.json", "token.json")
+	gmailClient, err = ingest.SetupOauthClient(ctx, "credentials.json", "token.json")
 	if err != nil {
 		fmt.Printf("Error on OauthSetup: %v", err)
 	}
@@ -39,26 +39,11 @@ func main() {
 	projectID := os.Getenv("GCloudProjectID")
 	topicName := os.Getenv("GCloudTopicName")
 	subName := os.Getenv("GCloudGmailSubscription")
-	subClient, err := injest.SetupPubSubClient(ctx, projectID, topicName, subName)
+	subClient, err := ingest.SetupPubSubClient(ctx, projectID, topicName, subName)
 	if err != nil {
 		log.Fatalf("Failed client initialization: %v", err)
 	}
 	log.Printf("Pub/Sub Subscriber worked: %s", subClient.ID())
-
-	watchResp, err := injest.WatchTopic(ctx, gmailClient, projectID, topicName)
-	if err != nil {
-		log.Fatalf("Failed to subscribe to Gmail: %v", err)
-	}
-	log.Printf("Watch response: %+v\n", watchResp)
-	go func() { // renew every day (7 days to expiration)
-		t := time.NewTicker(24 * time.Hour)
-		for range t.C {
-			_, err := injest.WatchTopic(ctx, gmailClient, projectID, topicName)
-			if err != nil {
-				log.Printf("Failed to renew subscription: %v", err)
-			}
-		}
-	}()
 
 	//Setup database
 	db, err := storage.Open("data/opengallery.db")
@@ -70,7 +55,26 @@ func main() {
 	log.Printf("db=%s journal_mode=%s", "opengallery", mode)
 	defer db.Close()
 
-	err = injest.ReceiveGmailNotifications(ctx, subClient, gmailClient)
+	watchResp, err := ingest.WatchTopic(ctx, gmailClient, projectID, topicName)
+	if err != nil {
+		log.Fatalf("Failed to subscribe to Gmail: %v", err)
+	}
+	err = storage.SeedCursor(db, watchResp.HistoryId, "gmail")
+	if err != nil {
+		log.Fatalf("SeedCursor failed: %v", err)
+	}
+	log.Printf("Watch response: %+v\n", watchResp)
+	go func() { // renew every day (7 days to expiration)
+		t := time.NewTicker(24 * time.Hour)
+		for range t.C {
+			_, err := ingest.WatchTopic(ctx, gmailClient, projectID, topicName)
+			if err != nil {
+				log.Printf("Failed to renew subscription: %v", err)
+			}
+		}
+	}()
+
+	err = ingest.ReceiveGmailNotifications(ctx, subClient, gmailClient, db)
 	if err != nil {
 		log.Fatalf("Failed to receive Gmail notifications: %v", err)
 	} else {
