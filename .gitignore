@@ -34,3 +34,4 @@ token.json
 
 /persist/*
 /data/*
+/temp_images/*

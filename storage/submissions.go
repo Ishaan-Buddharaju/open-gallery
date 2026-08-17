@@ -2,6 +2,7 @@ package storage
 
 import (
 	"database/sql"
+	"log"
 
 	_ "modernc.org/sqlite"
 )
@@ -22,6 +23,7 @@ func GetCursor(db *sql.DB, source string) (uint64, error) {
 func UpdateCursor(tx *sql.Tx, source string, historyID uint64) error {
 	query := "UPDATE INGEST_CURSOR SET history_id = ?1 WHERE source = ?2 AND history_id < ?1"
 	_, err := tx.Exec(query, historyID, source)
+	log.Printf("updated cursor for source=%s to historyId=%d", source, historyID)
 	return err
 }
 

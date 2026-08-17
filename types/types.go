@@ -14,6 +14,7 @@ type Submission struct {
 	ImageLocation            string
 	SubmissionConnection     string
 	SubmissionStatus         SubmissionStatus
+	SubmissionBody           string
 }
 
 /* Source System Represents the source for the Submission structs.
