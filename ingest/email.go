@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/mail"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"cloud.google.com/go/pubsub/v2"
@@ -250,7 +252,7 @@ func process(ctx context.Context, srv *gmail.Service, n types.GmailNotification,
 		return err
 	}
 
-	err = processNewMessages(ctx, srv, newMessages)
+	err = processNewMessages(ctx, srv, newMessages, db)
 	if err != nil {
 		log.Printf("processNewMessages failed: %v", err)
 		return err
@@ -296,44 +298,64 @@ func listNewMessages(gmailService *gmail.Service, startHistoryID uint64) (uint64
 
 }
 
-func processNewMessages(ctx context.Context, srv *gmail.Service, newMessages []*gmail.Message) error {
+func processNewMessages(ctx context.Context, srv *gmail.Service, newMessages []*gmail.Message, db *sql.DB) error {
 	for _, message := range newMessages {
-		err := processMessage(ctx, srv, message)
+		email, err := processMessage(ctx, srv, message)
 		if err != nil {
 			return err
 		}
 		log.Printf("Processed message %s", message.Id)
+		err = storage.AddSubmission(db, email)
+		if err != nil {
+			log.Printf("Failed to add submission to db: %v", err)
+			return err
+		}
 	}
 
 	return nil
 }
 
-func processMessage(ctx context.Context, srv *gmail.Service, message *gmail.Message) error {
+func processMessage(ctx context.Context, srv *gmail.Service, message *gmail.Message) (types.Submission, error) {
 	msg, err := srv.Users.Messages.Get("me", message.Id).Format("full").Context(ctx).Do()
-	if err != nil {
-		return err
-	}
 	email := types.Submission{}
-	parseMsgTree(ctx, srv, message.Id, msg.Payload, &email)
-	email.SubmissionAuthor, err = parseEnvelope(msg.Payload, "From") //TODO add more robust naming than just email
 	if err != nil {
-		log.Fatalf("Failed to parse From header: %v", err)
+		return email, err
 	}
-
-	return nil
+	parseMsgTree(ctx, srv, message.Id, msg.Payload, &email)
+	from, err := parseEnvelope(msg.Payload, "From")
+	if err != nil {
+		log.Printf("Failed to parse From header: %v", err)
+		return email, err
+	}
+	addr, err := mail.ParseAddress(from)
+	if err != nil {
+		log.Printf("Failed to parse From header: %v", err)
+		return email, err
+	}
+	email.Author = addr.Name
+	email.ContactDetails = addr.Address
+	email.SourceSystem = types.SourceEmail
+	tagsJSON, err := json.Marshal(recipientTags(msg.Payload))
+	if err != nil {
+		log.Printf("Failed to marshal tags: %v", err)
+	}
+	email.ConnectionTags = string(tagsJSON)
+	email.Status = types.SubmissionModerationPending
+	return email, nil
 }
 
 func parseMsgTree(ctx context.Context, srv *gmail.Service, msgID string, part *gmail.MessagePart, email *types.Submission) {
 	if part == nil {
 		return
-	} else if part.MimeType == "text/plain" && email.SubmissionBody == "" {
+	} else if part.MimeType == "text/plain" && email.Body == "" {
 		raw, err := decodeBase64(part.Body.Data)
 		if err != nil {
 			log.Fatalf("Failed to decode text/plain part: %v", err)
 		}
 		text := string(raw)
+		email.Body = text
 		log.Printf("Found text/plain part: %s", text)
-	} else if part.MimeType == "text/html" && email.SubmissionBody == "" {
+	} else if part.MimeType == "text/html" && email.Body == "" {
 		raw, err := decodeBase64(part.Body.Data)
 		if err != nil {
 			log.Fatalf("Failed to decode text/plain part: %v", err)
@@ -341,7 +363,9 @@ func parseMsgTree(ctx context.Context, srv *gmail.Service, msgID string, part *g
 		text := string(raw)
 		text = stripHTML(text)
 		log.Printf("Found text/html part: %s", text)
-		email.SubmissionBody = text
+		email.Body = text
+	} else if part.MimeType == "text/plain" || part.MimeType == "text/html" {
+		return // already processed in a different recursive call
 	} else if part.MimeType == "multipart/alternative" {
 		log.Printf("Found multipart/alternative part")
 		for _, p := range part.Parts {
@@ -358,11 +382,25 @@ func parseMsgTree(ctx context.Context, srv *gmail.Service, msgID string, part *g
 			parseMsgTree(ctx, srv, msgID, p, email)
 		}
 	} else if strings.HasPrefix(part.MimeType, "image/") {
-		log.Printf("Found image part: %s", part.Body.Data)
-		imgPath, err := saveImage(ctx, srv, msgID, part, "temp_images")
+		log.Printf("Found image part: %s", part.MimeType)
+		imgPath, err := saveImage(ctx, srv, msgID, part, os.Getenv("IMAGE_PATH"))
 		if err != nil {
 			log.Printf("Failed to save image: %v", err)
-		} else {
+		} else if imgPath != "" {
+			var paths []string
+			if email.ImagePaths != "" {
+				if err := json.Unmarshal([]byte(email.ImagePaths), &paths); err != nil {
+					log.Printf("Failed to unmarshal existing image paths: %v", err)
+					return
+				}
+			}
+			paths = append(paths, imgPath)
+			encoded, err := json.Marshal(paths)
+			if err != nil {
+				log.Printf("Failed to marshal image paths: %v", err)
+				return
+			}
+			email.ImagePaths = string(encoded)
 			log.Printf("Saved image: %s", imgPath)
 		}
 	} else {
@@ -423,7 +461,7 @@ func saveImage(ctx context.Context, srv *gmail.Service, msgID string, part *gmai
 	}
 
 	if part.Body.AttachmentId == "" {
-		return "", nil // inline data, handle separately if you care
+		return "", nil
 	}
 
 	att, err := srv.Users.Messages.Attachments.
@@ -445,13 +483,13 @@ func saveImage(ctx context.Context, srv *gmail.Service, msgID string, part *gmai
 	if err != nil {
 		return "", err
 	}
-	defer os.Remove(tmp.Name()) // no-op after successful rename
+	defer os.Remove(tmp.Name())
 
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		return "", err
 	}
-	if err := tmp.Sync(); err != nil { // flush to disk before rename
+	if err := tmp.Sync(); err != nil {
 		tmp.Close()
 		return "", err
 	}
@@ -462,4 +500,45 @@ func saveImage(ctx context.Context, srv *gmail.Service, msgID string, part *gmai
 		return "", err
 	}
 	return final, nil
+}
+
+func recipientTags(p *gmail.MessagePart) []string {
+	seen := map[string]bool{}
+	for _, h := range []string{"To", "Cc", "Delivered-To"} {
+		raw, err := parseEnvelope(p, h)
+		if err != nil {
+			continue
+		}
+		list, err := mail.ParseAddressList(raw)
+		if err != nil {
+			continue
+		}
+		for _, a := range list {
+			if t := parseTag(a.String()); t != "" {
+				seen[t] = true
+			}
+		}
+	}
+	tags := make([]string, 0, len(seen))
+	for t := range seen {
+		tags = append(tags, t)
+	}
+	sort.Strings(tags)
+	return tags
+}
+
+func parseTag(addr string) string {
+	a, err := mail.ParseAddress(addr)
+	if err != nil {
+		return ""
+	}
+	local, _, found := strings.Cut(a.Address, "@")
+	if !found {
+		return ""
+	}
+	_, tag, found := strings.Cut(local, "+")
+	if !found {
+		return ""
+	}
+	return strings.ToLower(tag)
 }

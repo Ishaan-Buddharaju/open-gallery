@@ -6,10 +6,11 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
-	ingest "github.com/Ishaan-Buddharaju/open-gallery/ingest"
+	"github.com/Ishaan-Buddharaju/open-gallery/ingest"
 	"github.com/Ishaan-Buddharaju/open-gallery/storage"
 	"github.com/joho/godotenv"
 	"google.golang.org/api/gmail/v1"
@@ -74,10 +75,15 @@ func main() {
 		}
 	}()
 
-	err = ingest.ReceiveGmailNotifications(ctx, subClient, gmailClient, db)
-	if err != nil {
-		log.Fatalf("Failed to receive Gmail notifications: %v", err)
-	} else {
-		log.Printf("Gmail notifications received successfully")
-	}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	wg.Go(func() {
+		if err := ingest.ReceiveGmailNotifications(ctx, subClient, gmailClient, db); err != nil {
+			log.Printf("gmail ingest stopped: %v", err)
+		}
+	})
+
+	<-ctx.Done()
+	log.Printf("shutting down")
+	wg.Wait()
 }

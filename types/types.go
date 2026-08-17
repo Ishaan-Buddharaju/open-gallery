@@ -8,13 +8,13 @@ import (
  * The fields contain references to image source locations and submission related metadata.
  */
 type Submission struct {
-	SubmissionAuthor         string
-	SubmissionContactDetails string
-	SourceSystem             SourceSystem
-	ImageLocation            string
-	SubmissionConnection     string
-	SubmissionStatus         SubmissionStatus
-	SubmissionBody           string
+	Author         string
+	ContactDetails string
+	SourceSystem   SourceSystem
+	ImagePaths     string
+	ConnectionTags string
+	Status         SubmissionStatus
+	Body           string
 }
 
 /* Source System Represents the source for the Submission structs.

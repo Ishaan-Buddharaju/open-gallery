@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"log"
 
+	"github.com/Ishaan-Buddharaju/open-gallery/types"
 	_ "modernc.org/sqlite"
 )
 
@@ -27,12 +28,8 @@ func UpdateCursor(tx *sql.Tx, source string, historyID uint64) error {
 	return err
 }
 
-// func SubmitGmailNotification(ctx context.Context, db *sql.DB, notification types.GmailNotification) (sql.Result, error) {
-// 	result, err := db.Exec("INSERT INTO EMAIL_NOTIFICATIONS (email, received_timestamp, historyID) VALUES (?, ?, ?)",
-// 		notification.EmailAddress, notification.ReceivedAt, notification.HistoryId)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	log.Printf("Added notification (historyId=%d) to database", notification.HistoryId)
-// 	return result, nil
-// }
+func AddSubmission(db *sql.DB, submission types.Submission) error {
+	query := "INSERT INTO NORMALIZED_SUBMISSIONS (source, status, author, contact_info, attribution_tags, image_paths, caption) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
+	_, err := db.Exec(query, submission.SourceSystem, submission.Status, submission.Author, submission.ContactDetails, submission.ConnectionTags, submission.ImagePaths, submission.Body)
+	return err
+}
