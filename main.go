@@ -46,7 +46,7 @@ func main() {
 	log.Printf("Pub/Sub Subscriber worked: %s", subClient.ID())
 
 	//Setup database
-	db, err := storage.Open("data/opengallery.db")
+	db, err := storage.Open(os.Getenv("DB_PATH"))
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}

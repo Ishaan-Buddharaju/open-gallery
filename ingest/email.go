@@ -3,16 +3,20 @@ package ingest
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"cloud.google.com/go/pubsub/v2"
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
 	"github.com/Ishaan-Buddharaju/open-gallery/storage"
 	"github.com/Ishaan-Buddharaju/open-gallery/types"
+	"golang.org/x/net/html"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/gmail/v1"
@@ -220,6 +224,7 @@ func ReceiveGmailNotifications(ctx context.Context, subClient *pubsub.Subscriber
 			return
 		}
 		msg.Ack()
+		log.Printf("acked notification (historyId=%d)", n.HistoryId)
 	}
 	log.Printf("Recieving Gmail notifications now")
 	return subClient.Receive(ctx, handler)
@@ -229,8 +234,25 @@ func process(ctx context.Context, srv *gmail.Service, n types.GmailNotification,
 	var cursor uint64
 	var err error
 	cursor, err = storage.GetCursor(db, "gmail")
+	log.Printf("GetCursor in process: cursor=%d", cursor)
 	if err != nil {
 		log.Printf("GetCursor failed: %v", err)
+		return err
+	}
+
+	newCursor, newMessages, err := listNewMessages(srv, cursor)
+	if newCursor != n.HistoryId {
+		log.Printf("Warning: newCursor (%d) != n.HistoryId (%d)", newCursor, n.HistoryId)
+	}
+	log.Printf("Found %d new messages in processing", len(newMessages))
+	if err != nil {
+		log.Printf("listNewMessages failed: %v", err)
+		return err
+	}
+
+	err = processNewMessages(ctx, srv, newMessages)
+	if err != nil {
+		log.Printf("processNewMessages failed: %v", err)
 		return err
 	}
 
@@ -240,51 +262,27 @@ func process(ctx context.Context, srv *gmail.Service, n types.GmailNotification,
 		return err
 	}
 	defer tx.Rollback()
-
-	newMessages, err := listNewMessages(srv, cursor)
-	log.Printf("Found %d new messages in processing", len(newMessages))
-	if err != nil {
-		log.Printf("listNewMessages failed: %v", err)
-		return err
-	}
-	for _, msg := range newMessages {
-		fmt.Println(msg)
-	}
-	err = storage.UpdateCursor(tx, "gmail", n.HistoryId)
+	err = storage.UpdateCursor(tx, "gmail", newCursor)
 
 	if err != nil {
 		log.Printf("UpdateCursor failed: %v", err)
 		return err
 	}
 
-	return nil
+	return tx.Commit()
 }
 
 /* Notification Processing after PubSub notification */
 
-// func ProcessNotification(ctx context.Context, srv *gmail.Service, history string) error {
-// TODO
-// }
-
-// func handleNewMessage(ctx context.Context, srv *gmail.Service, id string) error {
-// 	msg, err := srv.Users.Messages.Get("me", id).Format("full").Context(ctx).Do()
-// 	if err != nil {
-// 		return err
-// 	}
-//
-// 	log.Printf("%s: %s", id, msg.Snippet)
-// 	return nil
-// }
-
-// // TODO Add Oauth Device flow for the projector to setup the source inbox plus filters
-func listNewMessages(gmailService *gmail.Service, historyID uint64) ([]*gmail.Message, error) {
+// TODO Add Oauth Device flow for the projector to setup the source inbox plus filters
+func listNewMessages(gmailService *gmail.Service, startHistoryID uint64) (uint64, []*gmail.Message, error) {
 	var req *gmail.UsersHistoryListCall = gmailService.Users.History.List("me").
-		StartHistoryId(historyID).
+		StartHistoryId(startHistoryID).
 		HistoryTypes("messageAdded")
 	result, err := req.Do()
 	log.Printf("History result: %v", result)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	var newMessages []*gmail.Message
 	for _, h := range result.History {
@@ -294,15 +292,174 @@ func listNewMessages(gmailService *gmail.Service, historyID uint64) ([]*gmail.Me
 			log.Printf("Found message %s", m.Id)
 		}
 	}
-	return newMessages, nil
+	return result.HistoryId, newMessages, nil
 
 }
 
-// func processNewMessages(ctx context.Context, srv *gmail.Service, newMessages []*gmail.Message) (error) {
+func processNewMessages(ctx context.Context, srv *gmail.Service, newMessages []*gmail.Message) error {
+	for _, message := range newMessages {
+		err := processMessage(ctx, srv, message)
+		if err != nil {
+			return err
+		}
+		log.Printf("Processed message %s", message.Id)
+	}
 
-// }
+	return nil
+}
 
-// func processMessage(ctx context.Context, srv *gmail.Service, msg *gmail.Message) error {
-// 	var payload *gmail.MessagePart = msg.Payload
+func processMessage(ctx context.Context, srv *gmail.Service, message *gmail.Message) error {
+	msg, err := srv.Users.Messages.Get("me", message.Id).Format("full").Context(ctx).Do()
+	if err != nil {
+		return err
+	}
+	email := types.Submission{}
+	parseMsgTree(ctx, srv, message.Id, msg.Payload, &email)
+	email.SubmissionAuthor, err = parseEnvelope(msg.Payload, "From") //TODO add more robust naming than just email
+	if err != nil {
+		log.Fatalf("Failed to parse From header: %v", err)
+	}
 
-// }
+	return nil
+}
+
+func parseMsgTree(ctx context.Context, srv *gmail.Service, msgID string, part *gmail.MessagePart, email *types.Submission) {
+	if part == nil {
+		return
+	} else if part.MimeType == "text/plain" && email.SubmissionBody == "" {
+		raw, err := decodeBase64(part.Body.Data)
+		if err != nil {
+			log.Fatalf("Failed to decode text/plain part: %v", err)
+		}
+		text := string(raw)
+		log.Printf("Found text/plain part: %s", text)
+	} else if part.MimeType == "text/html" && email.SubmissionBody == "" {
+		raw, err := decodeBase64(part.Body.Data)
+		if err != nil {
+			log.Fatalf("Failed to decode text/plain part: %v", err)
+		}
+		text := string(raw)
+		text = stripHTML(text)
+		log.Printf("Found text/html part: %s", text)
+		email.SubmissionBody = text
+	} else if part.MimeType == "multipart/alternative" {
+		log.Printf("Found multipart/alternative part")
+		for _, p := range part.Parts {
+			parseMsgTree(ctx, srv, msgID, p, email)
+		}
+	} else if part.MimeType == "multipart/mixed" {
+		log.Printf("Found multipart/mixed part")
+		for _, p := range part.Parts {
+			parseMsgTree(ctx, srv, msgID, p, email)
+		}
+	} else if part.MimeType == "multipart/related" {
+		log.Printf("Found multipart/related part")
+		for _, p := range part.Parts {
+			parseMsgTree(ctx, srv, msgID, p, email)
+		}
+	} else if strings.HasPrefix(part.MimeType, "image/") {
+		log.Printf("Found image part: %s", part.Body.Data)
+		imgPath, err := saveImage(ctx, srv, msgID, part, "temp_images")
+		if err != nil {
+			log.Printf("Failed to save image: %v", err)
+		} else {
+			log.Printf("Saved image: %s", imgPath)
+		}
+	} else {
+		log.Fatalf("Unsupported MIME type: %s", part.MimeType)
+	}
+}
+
+func decodeBase64(data string) ([]byte, error) {
+	raw, err := base64.URLEncoding.DecodeString(data)
+	if err == nil {
+		return raw, nil
+	}
+	return base64.RawURLEncoding.DecodeString(data)
+}
+
+func stripHTML(s string) string {
+	doc, err := html.Parse(strings.NewReader(s))
+	if err != nil {
+		return ""
+	}
+	var b strings.Builder
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode && (n.Data == "script" || n.Data == "style") {
+			return
+		}
+		if n.Type == html.TextNode {
+			b.WriteString(n.Data)
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+func parseEnvelope(part *gmail.MessagePart, name string) (string, error) {
+	for _, h := range part.Headers {
+		if strings.EqualFold(h.Name, name) {
+			return h.Value, nil
+		}
+	}
+	return "", fmt.Errorf("header not found: %s", name)
+}
+
+func saveImage(ctx context.Context, srv *gmail.Service, msgID string, part *gmail.MessagePart, dir string) (string, error) {
+	// Only PNG and JPEG for now
+	var ext string
+	switch part.MimeType {
+	case "image/jpeg", "image/jpg", "image/JPG", "image/JPEG":
+		ext = ".jpg"
+	case "image/png", "image/PNG":
+		ext = ".png"
+	default:
+		log.Printf("Unsupported image/%s type, skipping... ", part.MimeType)
+		return "", nil // skip
+	}
+
+	if part.Body.AttachmentId == "" {
+		return "", nil // inline data, handle separately if you care
+	}
+
+	att, err := srv.Users.Messages.Attachments.
+		Get("me", msgID, part.Body.AttachmentId).Context(ctx).Do()
+	if err != nil {
+		return "", fmt.Errorf("fetch attachment: %w", err)
+	}
+	data, err := decodeBase64(att.Data)
+	if err != nil {
+		return "", fmt.Errorf("decode attachment: %w", err)
+	}
+
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	final := filepath.Join(dir, fmt.Sprintf("%s-%s%s", msgID, part.PartId, ext))
+
+	tmp, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(tmp.Name()) // no-op after successful rename
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return "", err
+	}
+	if err := tmp.Sync(); err != nil { // flush to disk before rename
+		tmp.Close()
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", err
+	}
+	if err := os.Rename(tmp.Name(), final); err != nil {
+		return "", err
+	}
+	return final, nil
+}
