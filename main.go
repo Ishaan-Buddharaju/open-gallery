@@ -76,7 +76,6 @@ func main() {
 	}()
 
 	var wg sync.WaitGroup
-	wg.Add(1)
 	wg.Go(func() {
 		if err := ingest.ReceiveGmailNotifications(ctx, subClient, gmailClient, db); err != nil {
 			log.Printf("gmail ingest stopped: %v", err)
