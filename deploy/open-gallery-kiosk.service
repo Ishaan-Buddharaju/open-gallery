@@ -1,0 +1,16 @@
+[Unit]
+Description=Gallery kiosk (Chromium)
+After=open-gallery.service
+Wants=open-gallery.service
+
+[Service]
+Type=simple
+User=pi
+Environment=DISPLAY=:0
+ExecStartPre=/usr/bin/xinit /bin/true -- :0 -nocursor
+ExecStart=/home/pi/open-gallery/deploy/kiosk.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

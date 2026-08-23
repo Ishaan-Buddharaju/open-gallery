@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gallery Wall</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #ffffff;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    overflow: hidden;
+    width: 100vw;
+    height: 100vh;
+  }
+
+  .wall {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    border: 3px solid var(--border-color, #16150f);
+  }
+
+  .wall-header {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    padding: 18px 26px 16px;
+    border-bottom: 1px solid var(--border-color, #16150f);
+  }
+  .wall-header .title {
+    font-family: 'Instrument Serif', serif;
+    font-size: 26px;
+    color: #16150f;
+  }
+  .wall-header .event {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    letter-spacing: .1em;
+    color: #8a8478;
+  }
+  .wall-header .stats {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+  .wall-header .stat-text {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    letter-spacing: .1em;
+    color: #8a8478;
+  }
+
+  .qr-section {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding-left: 20px;
+    border-left: 1px solid var(--border-color, #16150f);
+  }
+  .qr-grid {
+    flex: none;
+    width: 44px;
+    height: 44px;
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    grid-template-rows: repeat(7, 1fr);
+    gap: 1px;
+  }
+  .qr-grid span.on { background: #16150f; }
+  .qr-label {
+    font-family: 'Instrument Serif', serif;
+    font-size: 17px;
+    line-height: 1.1;
+    color: #16150f;
+  }
+  .qr-sub {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: .06em;
+    color: #8a8478;
+  }
+
+  .wall-grid {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    margin: 14px 18px 18px;
+    overflow: hidden;
+  }
+
+  .frame {
+    margin: 0;
+    position: absolute;
+    will-change: transform, opacity;
+  }
+  .frame-inner {
+    position: absolute;
+    inset: 0;
+    border: 1px solid var(--border-color, #16150f);
+    background: #fafaf8;
+  }
+  .frame-inner.glow {
+    box-shadow: 0 0 0 2px var(--border-color, #16150f);
+  }
+  .frame-img-wrap {
+    position: absolute;
+    inset: 5px;
+    overflow: hidden;
+  }
+  .frame-img-wrap img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .frame-placeholder {
+    width: 100%;
+    height: 100%;
+    background: #f0eeea;
+  }
+
+  .frame-caption {
+    position: absolute;
+    left: 5px;
+    right: 5px;
+    bottom: 5px;
+    padding: 8px 10px;
+    background: rgba(255, 255, 255, .94);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .frame-caption .cap-text {
+    font-family: 'Instrument Serif', serif;
+    font-style: italic;
+    font-size: 15px;
+    line-height: 1.2;
+    color: #16150f;
+  }
+  .frame-caption .cap-by {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    letter-spacing: .09em;
+    color: #8a8478;
+  }
+
+  .wall-footer {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 26px 16px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: .1em;
+    color: #a19c8e;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .frame { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wall">
+  <div class="wall-header">
+    <div style="display:flex;align-items:baseline;gap:14px">
+      <span class="title">Gallery Wall</span>
+      <span class="event">FIFTH &amp; ALDER · TONIGHT</span>
+    </div>
+    <div class="stats">
+      <span class="stat-text"><span id="accepted-count">0</span> ACCEPTED · REHANG <span id="cycle-label">8</span>S</span>
+      <div class="qr-section">
+        <div class="qr-grid">
+          <span class="on"></span><span class="on"></span><span class="on"></span><span></span><span class="on"></span><span class="on"></span><span class="on"></span>
+          <span class="on"></span><span></span><span class="on"></span><span class="on"></span><span></span><span></span><span class="on"></span>
+          <span class="on"></span><span></span><span class="on"></span><span></span><span class="on"></span><span></span><span class="on"></span>
+          <span></span><span class="on"></span><span></span><span class="on"></span><span class="on"></span><span class="on"></span><span></span>
+          <span class="on"></span><span></span><span class="on"></span><span></span><span class="on"></span><span></span><span class="on"></span>
+          <span class="on"></span><span class="on"></span><span></span><span class="on"></span><span></span><span></span><span class="on"></span>
+          <span class="on"></span><span class="on"></span><span class="on"></span><span></span><span class="on"></span><span class="on"></span><span class="on"></span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:1px">
+          <span class="qr-label">Add yours</span>
+          <span class="qr-sub">text 415 555 0134</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="wall-grid" id="wall-grid"></div>
+
+  <div class="wall-footer">
+    <span><span id="frame-count">0 FRAMES</span></span>
+    <span>NEXT IN <span id="countdown">8</span>S · NEW: <span id="arrived-by">—</span></span>
+  </div>
+</div>
+
+<script type="module">
+import { justify } from '/justify.js';
+
+const CYCLE_SECS = 8;
+const GUTTER = 8;
+const POLL_MS = 10000;
+
+const ANIM_DURATION = 900;
+const ENTER_DURATION = 700;
+const EXIT_DURATION = 400;
+const STAGGER_PER_ROW = 80;
+const STAGGER_CAP = 320;
+
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+let submissions = [];
+let displaySubs = [];
+let currentView = [];
+let knownCount = 0;
+let countdown = CYCLE_SECS;
+let newestIdx = 0;
+let cycleIdx = 0;
+let dropOffset = 0;
+
+const grid = document.getElementById('wall-grid');
+const frameMap = new Map();
+
+function subToItem(sub) {
+  const img = sub.images && sub.images[0];
+  let aspect = 1.333;
+  if (img && img.w && img.h) {
+    aspect = img.w / img.h;
+  }
+  const id = (img && img.url) || (sub.timestamp + '-' + sub.author);
+  return { id, aspect, sub };
+}
+
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function nextView() {
+  const full = displaySubs;
+  const n = full.length;
+  if (n === 0) return [];
+
+  cycleIdx++;
+
+  if (cycleIdx % 3 === 2 && n >= 6) {
+    const dropCount = n >= 10 ? 2 : 1;
+    const shuffled = shuffle(full);
+    dropOffset = (dropOffset + dropCount) % n;
+    return shuffled.slice(dropCount);
+  }
+
+  return shuffle(full);
+}
+
+function renderLayout(animate) {
+  const n = currentView.length;
+  if (n === 0) return;
+
+  const width = grid.clientWidth;
+  const height = grid.clientHeight;
+  if (width === 0 || height === 0) return;
+
+  const items = currentView.map(subToItem);
+  const result = justify(items, { width, height, gutter: GUTTER });
+
+  document.getElementById('frame-count').textContent = n + ' FRAMES';
+
+  // F — snapshot existing positions
+  const first = new Map();
+  for (const [id, f] of frameMap) {
+    first.set(id, {
+      x: parseFloat(f.el.style.left),
+      y: parseFloat(f.el.style.top),
+      w: parseFloat(f.el.style.width),
+      h: parseFloat(f.el.style.height),
+    });
+  }
+
+  // Build new id set and row indices
+  const newIds = new Set();
+  const rowIndex = new Map();
+  for (let ri = 0; ri < result.rows.length; ri++) {
+    for (const it of result.rows[ri].items) {
+      newIds.add(it.id);
+      rowIndex.set(it.id, ri);
+    }
+  }
+
+  // Remove old frames
+  for (const [id, f] of frameMap) {
+    if (!newIds.has(id)) {
+      if (animate && !reducedMotion) {
+        const anim = f.el.animate([
+          { opacity: 1, transform: 'scale(1)' },
+          { opacity: 0, transform: 'scale(0.88)' },
+        ], { duration: EXIT_DURATION, easing: 'cubic-bezier(0.4, 0, 1, 1)' });
+        anim.onfinish = () => f.el.remove();
+      } else {
+        f.el.remove();
+      }
+      frameMap.delete(id);
+    }
+  }
+
+  // L — place frames at final positions
+  let itemIdx = 0;
+  for (const row of result.rows) {
+    for (const it of row.items) {
+      let f = frameMap.get(it.id);
+      const isNew = !f;
+      const item = items.find(i => i.id === it.id);
+      const sub = item?.sub;
+
+      if (isNew) {
+        const el = document.createElement('figure');
+        el.className = 'frame';
+
+        const inner = document.createElement('div');
+        inner.className = 'frame-inner';
+
+        const imgWrap = document.createElement('div');
+        imgWrap.className = 'frame-img-wrap';
+        inner.appendChild(imgWrap);
+
+        const caption = document.createElement('div');
+        caption.className = 'frame-caption';
+        caption.style.display = 'none';
+        caption.innerHTML = '<span class="cap-text"></span><span class="cap-by"></span>';
+        inner.appendChild(caption);
+
+        el.appendChild(inner);
+        grid.appendChild(el);
+        f = { el, inner, imgWrap, caption };
+        frameMap.set(it.id, f);
+      }
+
+      f.el.style.left = it.x + 'px';
+      f.el.style.top = it.y + 'px';
+      f.el.style.width = it.w + 'px';
+      f.el.style.height = it.h + 'px';
+
+      // Update image
+      if (sub && sub.images && sub.images.length > 0) {
+        const src = sub.images[0].url || sub.images[0];
+        const existing = f.imgWrap.querySelector('img');
+        if (!existing || existing.getAttribute('src') !== src) {
+          f.imgWrap.innerHTML = '';
+          const img = document.createElement('img');
+          img.src = src;
+          img.alt = sub.caption || '';
+          f.imgWrap.appendChild(img);
+        }
+      }
+
+      // Caption on newest
+      const isNewest = itemIdx === newestIdx % n;
+      f.inner.classList.toggle('glow', isNewest);
+      if (isNewest && sub) {
+        f.caption.style.display = '';
+        f.caption.querySelector('.cap-text').textContent = sub.caption || '';
+        f.caption.querySelector('.cap-by').textContent = (sub.author + ' · ' + sub.source).toUpperCase();
+      } else {
+        f.caption.style.display = 'none';
+      }
+
+      // Animate
+      if (animate && !reducedMotion) {
+        const ri = rowIndex.get(it.id) || 0;
+        const stagger = Math.min(ri * STAGGER_PER_ROW, STAGGER_CAP);
+
+        if (isNew) {
+          f.el.animate([
+            { opacity: 0, transform: 'scale(0.88)' },
+            { opacity: 1, transform: 'scale(1)' },
+          ], {
+            duration: ENTER_DURATION,
+            delay: stagger,
+            easing: 'cubic-bezier(0.0, 0.0, 0.2, 1)',
+            fill: 'backwards',
+          });
+        } else if (first.has(it.id)) {
+          const prev = first.get(it.id);
+          const dx = prev.x - it.x;
+          const dy = prev.y - it.y;
+          const sx = prev.w / it.w;
+          const sy = prev.h / it.h;
+
+          if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5 || Math.abs(sx - 1) > 0.01 || Math.abs(sy - 1) > 0.01) {
+            f.el.animate([
+              { transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})` },
+              { transform: 'translate(0,0) scale(1,1)' },
+            ], {
+              duration: ANIM_DURATION,
+              delay: stagger,
+              easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+              fill: 'backwards',
+            });
+          }
+        }
+      }
+
+      itemIdx++;
+    }
+  }
+}
+
+function rebuildDisplay(animate) {
+  displaySubs = submissions.filter(s => s.images && s.images.length > 0);
+  currentView = [...displaySubs];
+  renderLayout(animate);
+}
+
+function tick() {
+  if (displaySubs.length === 0) {
+    document.getElementById('countdown').textContent = '—';
+    return;
+  }
+  countdown--;
+  if (countdown <= 0) {
+    countdown = CYCLE_SECS;
+    newestIdx = (newestIdx + Math.max(1, Math.floor(displaySubs.length / 3))) % displaySubs.length;
+    currentView = nextView();
+    renderLayout(true);
+  }
+  document.getElementById('countdown').textContent = countdown;
+}
+
+function fetchSubmissions() {
+  fetch('/api/submissions')
+    .then(r => r.json())
+    .then(data => {
+      document.getElementById('accepted-count').textContent = data.accepted;
+      const withImages = (data.submissions || []).filter(s => s.images && s.images.length > 0);
+      const isNew = withImages.length !== knownCount;
+      if (isNew) {
+        knownCount = withImages.length;
+        countdown = 1;
+      }
+      submissions = data.submissions || [];
+      rebuildDisplay(isNew);
+      if (displaySubs.length > 0) {
+        const latest = displaySubs[0];
+        document.getElementById('arrived-by').textContent =
+          (latest.author + ' · ' + latest.source).toUpperCase();
+      }
+    })
+    .catch(e => console.error('fetch error:', e));
+}
+
+window.addEventListener('resize', () => renderLayout(false));
+
+document.getElementById('cycle-label').textContent = CYCLE_SECS;
+fetchSubmissions();
+setInterval(tick, 1000);
+setInterval(fetchSubmissions, POLL_MS);
+</script>
+
+</body>
+</html>
