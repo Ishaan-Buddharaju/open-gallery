@@ -1,11 +1,16 @@
 package ingest
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
 	"log"
 	"net/http"
 	"net/mail"
@@ -13,6 +18,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"cloud.google.com/go/pubsub/v2"
 	"cloud.google.com/go/pubsub/v2/apiv1/pubsubpb"
@@ -36,6 +42,21 @@ func SetupOauthClient(ctx context.Context, credsFile string, tokenFile string) (
 		return nil, err
 	}
 
+	// Validate the token by forcing a refresh. If the refresh token is
+	// revoked or expired, delete token.json and re-run the OAuth flow.
+	if _, err := tokenSource.Token(); err != nil {
+		if isTokenExpiredErr(err) {
+			log.Printf("Token expired or revoked, deleting %s and re-authenticating", tokenFile)
+			os.Remove(tokenFile)
+			tokenSource, err = setupGmailTokenSource(ctx, credsFile, tokenFile)
+			if err != nil {
+				return nil, fmt.Errorf("re-auth failed: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("token validation failed: %w", err)
+		}
+	}
+
 	gmailService, err := gmail.NewService(ctx, option.WithTokenSource(tokenSource))
 	if err != nil {
 		log.Printf("Failed to initialize Gmail client: %v", err)
@@ -43,6 +64,23 @@ func SetupOauthClient(ctx context.Context, credsFile string, tokenFile string) (
 	}
 
 	return gmailService, nil
+}
+
+func isTokenExpiredErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	for _, needle := range []string{"token expired", "invalid_grant", "Token has been expired or revoked"} {
+		if strings.Contains(s, needle) {
+			return true
+		}
+	}
+	var retrieveErr *oauth2.RetrieveError
+	if errors.As(err, &retrieveErr) {
+		return retrieveErr.Response != nil && retrieveErr.Response.StatusCode == 401
+	}
+	return false
 }
 
 func setupGmailTokenSource(ctx context.Context, credsFile string, tokenFile string) (oauth2.TokenSource, error) {
@@ -194,6 +232,21 @@ func WatchTopic(ctx context.Context, gmailClient *gmail.Service, projectID strin
 	return watchResp, nil
 }
 
+func RenewWatch(ctx context.Context, gmailClient *gmail.Service, projectID, topicName string) {
+	t := time.NewTicker(24 * time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-t.C:
+			if _, err := WatchTopic(ctx, gmailClient, projectID, topicName); err != nil {
+				log.Printf("Failed to renew subscription: %v", err)
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 func IsAlreadyExists(err error) bool {
 	if err == nil {
 		return false
@@ -204,7 +257,7 @@ func IsAlreadyExists(err error) bool {
 
 /* Notification Processing from PubSub */
 
-func ReceiveGmailNotifications(ctx context.Context, subClient *pubsub.Subscriber, srv *gmail.Service, db *sql.DB) error {
+func ReceiveGmailNotifications(ctx context.Context, subClient *pubsub.Subscriber, srv *gmail.Service, db *sql.DB, imageDir string) error {
 	handler := func(ctx context.Context, msg *pubsub.Message) {
 		var n types.GmailNotification
 		if err := json.Unmarshal(msg.Data, &n); err != nil {
@@ -220,10 +273,8 @@ func ReceiveGmailNotifications(ctx context.Context, subClient *pubsub.Subscriber
 		// }
 
 		log.Printf("Received notification (historyId=%d)", n.HistoryId)
-		if err := process(ctx, srv, n, db); err != nil {
+		if err := process(ctx, srv, n, db, imageDir); err != nil {
 			log.Printf("process failed (historyId=%d): %v", n.HistoryId, err)
-			msg.Nack()
-			return
 		}
 		msg.Ack()
 		log.Printf("acked notification (historyId=%d)", n.HistoryId)
@@ -232,7 +283,7 @@ func ReceiveGmailNotifications(ctx context.Context, subClient *pubsub.Subscriber
 	return subClient.Receive(ctx, handler)
 }
 
-func process(ctx context.Context, srv *gmail.Service, n types.GmailNotification, db *sql.DB) error {
+func process(ctx context.Context, srv *gmail.Service, n types.GmailNotification, db *sql.DB, imageDir string) error {
 	var cursor uint64
 	var err error
 	cursor, err = storage.GetCursor(db, "gmail")
@@ -252,7 +303,7 @@ func process(ctx context.Context, srv *gmail.Service, n types.GmailNotification,
 		return err
 	}
 
-	err = processNewMessages(ctx, srv, newMessages, db)
+	err = processNewMessages(ctx, srv, newMessages, db, imageDir)
 	if err != nil {
 		log.Printf("processNewMessages failed: %v", err)
 		return err
@@ -298,30 +349,31 @@ func listNewMessages(gmailService *gmail.Service, startHistoryID uint64) (uint64
 
 }
 
-func processNewMessages(ctx context.Context, srv *gmail.Service, newMessages []*gmail.Message, db *sql.DB) error {
+func processNewMessages(ctx context.Context, srv *gmail.Service, newMessages []*gmail.Message, db *sql.DB, imageDir string) error {
 	for _, message := range newMessages {
-		email, err := processMessage(ctx, srv, message)
+		email, err := processMessage(ctx, srv, message, imageDir)
 		if err != nil {
-			return err
+			log.Printf("Skipping message %s: %v", message.Id, err)
+			continue
 		}
 		log.Printf("Processed message %s", message.Id)
 		err = storage.AddSubmission(db, email)
 		if err != nil {
-			log.Printf("Failed to add submission to db: %v", err)
-			return err
+			log.Printf("Failed to add submission %s to db: %v", message.Id, err)
+			continue
 		}
 	}
 
 	return nil
 }
 
-func processMessage(ctx context.Context, srv *gmail.Service, message *gmail.Message) (types.Submission, error) {
+func processMessage(ctx context.Context, srv *gmail.Service, message *gmail.Message, imageDir string) (types.Submission, error) {
 	msg, err := srv.Users.Messages.Get("me", message.Id).Format("full").Context(ctx).Do()
 	email := types.Submission{}
 	if err != nil {
 		return email, err
 	}
-	parseMsgTree(ctx, srv, message.Id, msg.Payload, &email)
+	parseMsgTree(ctx, srv, message.Id, msg.Payload, &email, imageDir)
 	from, err := parseEnvelope(msg.Payload, "From")
 	if err != nil {
 		log.Printf("Failed to parse From header: %v", err)
@@ -340,17 +392,19 @@ func processMessage(ctx context.Context, srv *gmail.Service, message *gmail.Mess
 		log.Printf("Failed to marshal tags: %v", err)
 	}
 	email.ConnectionTags = string(tagsJSON)
-	email.Status = types.SubmissionModerationPending
+	// TODO: route through moderation service once built
+	email.Status = types.SubmissionModerationAccepted
 	return email, nil
 }
 
-func parseMsgTree(ctx context.Context, srv *gmail.Service, msgID string, part *gmail.MessagePart, email *types.Submission) {
+func parseMsgTree(ctx context.Context, srv *gmail.Service, msgID string, part *gmail.MessagePart, email *types.Submission, imageDir string) {
 	if part == nil {
 		return
 	} else if part.MimeType == "text/plain" && email.Body == "" {
 		raw, err := decodeBase64(part.Body.Data)
 		if err != nil {
-			log.Fatalf("Failed to decode text/plain part: %v", err)
+			log.Printf("Failed to decode text/plain part: %v", err)
+			return
 		}
 		text := string(raw)
 		email.Body = text
@@ -358,7 +412,8 @@ func parseMsgTree(ctx context.Context, srv *gmail.Service, msgID string, part *g
 	} else if part.MimeType == "text/html" && email.Body == "" {
 		raw, err := decodeBase64(part.Body.Data)
 		if err != nil {
-			log.Fatalf("Failed to decode text/plain part: %v", err)
+			log.Printf("Failed to decode text/html part: %v", err)
+			return
 		}
 		text := string(raw)
 		text = stripHTML(text)
@@ -369,42 +424,42 @@ func parseMsgTree(ctx context.Context, srv *gmail.Service, msgID string, part *g
 	} else if part.MimeType == "multipart/alternative" {
 		log.Printf("Found multipart/alternative part")
 		for _, p := range part.Parts {
-			parseMsgTree(ctx, srv, msgID, p, email)
+			parseMsgTree(ctx, srv, msgID, p, email, imageDir)
 		}
 	} else if part.MimeType == "multipart/mixed" {
 		log.Printf("Found multipart/mixed part")
 		for _, p := range part.Parts {
-			parseMsgTree(ctx, srv, msgID, p, email)
+			parseMsgTree(ctx, srv, msgID, p, email, imageDir)
 		}
 	} else if part.MimeType == "multipart/related" {
 		log.Printf("Found multipart/related part")
 		for _, p := range part.Parts {
-			parseMsgTree(ctx, srv, msgID, p, email)
+			parseMsgTree(ctx, srv, msgID, p, email, imageDir)
 		}
 	} else if strings.HasPrefix(part.MimeType, "image/") {
 		log.Printf("Found image part: %s", part.MimeType)
-		imgPath, err := saveImage(ctx, srv, msgID, part, os.Getenv("IMAGE_PATH"))
+		meta, err := saveImage(ctx, srv, msgID, part, imageDir)
 		if err != nil {
 			log.Printf("Failed to save image: %v", err)
-		} else if imgPath != "" {
-			var paths []string
+		} else if meta.Path != "" {
+			var metas []types.ImageMeta
 			if email.ImagePaths != "" {
-				if err := json.Unmarshal([]byte(email.ImagePaths), &paths); err != nil {
-					log.Printf("Failed to unmarshal existing image paths: %v", err)
+				if err := json.Unmarshal([]byte(email.ImagePaths), &metas); err != nil {
+					log.Printf("Failed to unmarshal existing image metas: %v", err)
 					return
 				}
 			}
-			paths = append(paths, imgPath)
-			encoded, err := json.Marshal(paths)
+			metas = append(metas, meta)
+			encoded, err := json.Marshal(metas)
 			if err != nil {
-				log.Printf("Failed to marshal image paths: %v", err)
+				log.Printf("Failed to marshal image metas: %v", err)
 				return
 			}
 			email.ImagePaths = string(encoded)
-			log.Printf("Saved image: %s", imgPath)
+			log.Printf("Saved image: %s (%dx%d)", meta.Path, meta.Width, meta.Height)
 		}
 	} else {
-		log.Fatalf("Unsupported MIME type: %s", part.MimeType)
+		log.Printf("Skipping unsupported MIME type: %s", part.MimeType)
 	}
 }
 
@@ -447,8 +502,7 @@ func parseEnvelope(part *gmail.MessagePart, name string) (string, error) {
 	return "", fmt.Errorf("header not found: %s", name)
 }
 
-func saveImage(ctx context.Context, srv *gmail.Service, msgID string, part *gmail.MessagePart, dir string) (string, error) {
-	// Only PNG and JPEG for now
+func saveImage(ctx context.Context, srv *gmail.Service, msgID string, part *gmail.MessagePart, dir string) (types.ImageMeta, error) {
 	var ext string
 	switch part.MimeType {
 	case "image/jpeg", "image/jpg", "image/JPG", "image/JPEG":
@@ -457,49 +511,54 @@ func saveImage(ctx context.Context, srv *gmail.Service, msgID string, part *gmai
 		ext = ".png"
 	default:
 		log.Printf("Unsupported image/%s type, skipping... ", part.MimeType)
-		return "", nil // skip
+		return types.ImageMeta{}, nil
 	}
 
 	if part.Body.AttachmentId == "" {
-		return "", nil
+		return types.ImageMeta{}, nil
 	}
 
 	att, err := srv.Users.Messages.Attachments.
 		Get("me", msgID, part.Body.AttachmentId).Context(ctx).Do()
 	if err != nil {
-		return "", fmt.Errorf("fetch attachment: %w", err)
+		return types.ImageMeta{}, fmt.Errorf("fetch attachment: %w", err)
 	}
 	data, err := decodeBase64(att.Data)
 	if err != nil {
-		return "", fmt.Errorf("decode attachment: %w", err)
+		return types.ImageMeta{}, fmt.Errorf("decode attachment: %w", err)
+	}
+
+	cfg, _, decErr := image.DecodeConfig(bytes.NewReader(data))
+	if decErr != nil {
+		log.Printf("could not read image dimensions: %v", decErr)
 	}
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
+		return types.ImageMeta{}, err
 	}
 	final := filepath.Join(dir, fmt.Sprintf("%s-%s%s", msgID, part.PartId, ext))
 
 	tmp, err := os.CreateTemp(dir, ".tmp-*")
 	if err != nil {
-		return "", err
+		return types.ImageMeta{}, err
 	}
 	defer os.Remove(tmp.Name())
 
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
-		return "", err
+		return types.ImageMeta{}, err
 	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
-		return "", err
+		return types.ImageMeta{}, err
 	}
 	if err := tmp.Close(); err != nil {
-		return "", err
+		return types.ImageMeta{}, err
 	}
 	if err := os.Rename(tmp.Name(), final); err != nil {
-		return "", err
+		return types.ImageMeta{}, err
 	}
-	return final, nil
+	return types.ImageMeta{Path: final, Width: cfg.Width, Height: cfg.Height}, nil
 }
 
 func recipientTags(p *gmail.MessagePart) []string {

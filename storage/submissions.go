@@ -33,3 +33,39 @@ func AddSubmission(db *sql.DB, submission types.Submission) error {
 	_, err := db.Exec(query, submission.SourceSystem, submission.Status, submission.Author, submission.ContactDetails, submission.ConnectionTags, submission.ImagePaths, submission.Body)
 	return err
 }
+
+type WallSubmission struct {
+	Author    string `json:"author"`
+	Source    string `json:"source"`
+	Images    string `json:"images"`
+	Caption   string `json:"caption"`
+	Timestamp string `json:"timestamp"`
+}
+
+func ListAcceptedSubmissions(db *sql.DB, limit int) ([]WallSubmission, error) {
+	query := "SELECT author, source, image_paths, caption, timestamp FROM NORMALIZED_SUBMISSIONS WHERE status IN (?1, ?2) ORDER BY timestamp DESC LIMIT ?3"
+	rows, err := db.Query(query, int(types.SubmissionModerationAccepted), int(types.SubmissionComplete), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var subs []WallSubmission
+	for rows.Next() {
+		var s WallSubmission
+		var src int
+		if err := rows.Scan(&s.Author, &src, &s.Images, &s.Caption, &s.Timestamp); err != nil {
+			return nil, err
+		}
+		s.Source = types.SourceSystem(src).String()
+		subs = append(subs, s)
+	}
+	return subs, rows.Err()
+}
+
+func CountAccepted(db *sql.DB) (int, error) {
+	var count int
+	query := "SELECT COUNT(*) FROM NORMALIZED_SUBMISSIONS WHERE status IN (?1, ?2)"
+	err := db.QueryRow(query, int(types.SubmissionModerationAccepted), int(types.SubmissionComplete)).Scan(&count)
+	return count, err
+}

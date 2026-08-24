@@ -4,86 +4,84 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"os/signal"
 	"sync"
 	"syscall"
-	"time"
 
+	"net/http"
+
+	"github.com/Ishaan-Buddharaju/open-gallery/config"
 	"github.com/Ishaan-Buddharaju/open-gallery/ingest"
 	"github.com/Ishaan-Buddharaju/open-gallery/storage"
-	"github.com/joho/godotenv"
-	"google.golang.org/api/gmail/v1"
+	"github.com/Ishaan-Buddharaju/open-gallery/web"
 )
 
-//TODODODODODO Add cursor syncing
-
 func main() {
+	if err := run(); err != nil {
+		log.Fatalf("fatal: %v", err)
+	}
+}
+
+func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(),
-		os.Interrupt, syscall.SIGTERM)
+		syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	var (
-		gmailClient *gmail.Service
-		err         error
-	)
-	gmailClient, err = ingest.SetupOauthClient(ctx, "credentials.json", "token.json")
+	cfg, err := config.Load()
 	if err != nil {
-		fmt.Printf("Error on OauthSetup: %v", err)
+		return fmt.Errorf("config: %w", err)
 	}
 
-	err = godotenv.Load()
+	gmailClient, err := ingest.SetupOauthClient(ctx, cfg.CredsFile, cfg.TokenFile)
 	if err != nil {
-		log.Fatalf("Error loading .env")
+		return fmt.Errorf("oauth setup: %w", err)
 	}
 
-	projectID := os.Getenv("GCloudProjectID")
-	topicName := os.Getenv("GCloudTopicName")
-	subName := os.Getenv("GCloudGmailSubscription")
-	subClient, err := ingest.SetupPubSubClient(ctx, projectID, topicName, subName)
+	db, err := storage.Open(cfg.DBPath)
 	if err != nil {
-		log.Fatalf("Failed client initialization: %v", err)
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+
+	var mode string
+	db.QueryRow("PRAGMA journal_mode").Scan(&mode)
+	log.Printf("db=%s journal_mode=%s", cfg.DBPath, mode)
+
+	subClient, err := ingest.SetupPubSubClient(ctx, cfg.ProjectID, cfg.TopicName, cfg.SubName)
+	if err != nil {
+		return fmt.Errorf("pubsub client: %w", err)
 	}
 	log.Printf("Pub/Sub Subscriber worked: %s", subClient.ID())
 
-	//Setup database
-	db, err := storage.Open(os.Getenv("DB_PATH"))
+	watchResp, err := ingest.WatchTopic(ctx, gmailClient, cfg.ProjectID, cfg.TopicName)
 	if err != nil {
-		log.Fatalf("Failed to open database: %v", err)
+		return fmt.Errorf("gmail watch: %w", err)
 	}
-	var mode string
-	db.QueryRow("PRAGMA journal_mode").Scan(&mode)
-	log.Printf("db=%s journal_mode=%s", "opengallery", mode)
-	defer db.Close()
+	if err := storage.SeedCursor(db, watchResp.HistoryId, "gmail"); err != nil {
+		return fmt.Errorf("seed cursor: %w", err)
+	}
+	log.Printf("Watch response: %+v", watchResp)
 
-	watchResp, err := ingest.WatchTopic(ctx, gmailClient, projectID, topicName)
-	if err != nil {
-		log.Fatalf("Failed to subscribe to Gmail: %v", err)
-	}
-	err = storage.SeedCursor(db, watchResp.HistoryId, "gmail")
-	if err != nil {
-		log.Fatalf("SeedCursor failed: %v", err)
-	}
-	log.Printf("Watch response: %+v\n", watchResp)
-	go func() { // renew every day (7 days to expiration)
-		t := time.NewTicker(24 * time.Hour)
-		for range t.C {
-			_, err := ingest.WatchTopic(ctx, gmailClient, projectID, topicName)
-			if err != nil {
-				log.Printf("Failed to renew subscription: %v", err)
-			}
-		}
-	}()
+	srv := web.New(db, cfg.HTTPAddr, cfg.ImageDir)
 
 	var wg sync.WaitGroup
-	wg.Add(1)
 	wg.Go(func() {
-		if err := ingest.ReceiveGmailNotifications(ctx, subClient, gmailClient, db); err != nil {
+		ingest.RenewWatch(ctx, gmailClient, cfg.ProjectID, cfg.TopicName)
+	})
+	wg.Go(func() {
+		if err := ingest.ReceiveGmailNotifications(ctx, subClient, gmailClient, db, cfg.ImageDir); err != nil {
 			log.Printf("gmail ingest stopped: %v", err)
+		}
+	})
+	wg.Go(func() {
+		if err := srv.Start(); err != nil && err != http.ErrServerClosed {
+			log.Printf("web server stopped: %v", err)
 		}
 	})
 
 	<-ctx.Done()
 	log.Printf("shutting down")
+	srv.Shutdown(context.Background())
 	wg.Wait()
+	return nil
 }
