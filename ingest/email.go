@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/jpeg"
@@ -41,6 +42,21 @@ func SetupOauthClient(ctx context.Context, credsFile string, tokenFile string) (
 		return nil, err
 	}
 
+	// Validate the token by forcing a refresh. If the refresh token is
+	// revoked or expired, delete token.json and re-run the OAuth flow.
+	if _, err := tokenSource.Token(); err != nil {
+		if isTokenExpiredErr(err) {
+			log.Printf("Token expired or revoked, deleting %s and re-authenticating", tokenFile)
+			os.Remove(tokenFile)
+			tokenSource, err = setupGmailTokenSource(ctx, credsFile, tokenFile)
+			if err != nil {
+				return nil, fmt.Errorf("re-auth failed: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("token validation failed: %w", err)
+		}
+	}
+
 	gmailService, err := gmail.NewService(ctx, option.WithTokenSource(tokenSource))
 	if err != nil {
 		log.Printf("Failed to initialize Gmail client: %v", err)
@@ -48,6 +64,23 @@ func SetupOauthClient(ctx context.Context, credsFile string, tokenFile string) (
 	}
 
 	return gmailService, nil
+}
+
+func isTokenExpiredErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	for _, needle := range []string{"token expired", "invalid_grant", "Token has been expired or revoked"} {
+		if strings.Contains(s, needle) {
+			return true
+		}
+	}
+	var retrieveErr *oauth2.RetrieveError
+	if errors.As(err, &retrieveErr) {
+		return retrieveErr.Response != nil && retrieveErr.Response.StatusCode == 401
+	}
+	return false
 }
 
 func setupGmailTokenSource(ctx context.Context, credsFile string, tokenFile string) (oauth2.TokenSource, error) {
