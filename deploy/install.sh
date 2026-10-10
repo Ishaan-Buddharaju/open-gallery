@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-DEST=/home/pi/open-gallery
+DEST=/home/ibuddhar/open-gallery
 
 mkdir -p "$DEST/deploy" "$DEST/data" "$DEST/temp_images"
 

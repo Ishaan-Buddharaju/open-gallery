@@ -5,12 +5,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/open-gallery
-ExecStart=/home/pi/open-gallery/open-gallery
+User=ibuddhar
+WorkingDirectory=/home/ibuddhar/open-gallery
+ExecStart=/home/ibuddhar/open-gallery/open-gallery
 Restart=on-failure
 RestartSec=5
-EnvironmentFile=/home/pi/open-gallery/.env
 
 [Install]
 WantedBy=multi-user.target
