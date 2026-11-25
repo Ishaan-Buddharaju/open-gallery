@@ -7,10 +7,16 @@ For layout with W_i x H_i
 and 
 For candidate cells W_c x H_c
 
-scale_min > max(W_c / W_i, H_c / H_i)
-scale_max > max(W_c / W_f, H_c / H_f ) where f denotes the focal region
+crop_min > max(W_c / W_i, H_c / H_i)
+crop_max > max(W_c / W_f, H_c / H_f ) where f denotes the focal region
 
-Images fit into a cell candidate iff scale_min <=scale_max
+Images fit into a cell candidate iff crop_min <=crop _max
+
+coverScale = max(Wc / Wi, Hc / Hi)
+focalMaxScale = min(Wc / Wf, Hc / Hf)
+
+valid iff coverScale >= minScale
+       and coverScale <= focalMaxScale
 
 ### Generating Grid Candidates
 For Spaced Grid we constrain it to a rectangualar grid.

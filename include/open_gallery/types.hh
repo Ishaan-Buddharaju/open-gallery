@@ -41,7 +41,7 @@ public:
             topLeft_.x = topLeft.x / widthPx;
             topLeft_.y = topLeft.y / heightPx;
             botRight_.x = botRight.x / widthPx;
-            botRight.y = botRight.y / heightPx;
+            botRight_.y = botRight.y / heightPx;
         }
 
     Point topLeft() { return topLeft_; }

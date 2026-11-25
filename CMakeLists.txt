@@ -18,4 +18,8 @@ if(BUILD_TESTING)
     )
     target_link_libraries(open_gallery_tests PRIVATE open_gallery)
     add_test(NAME open_gallery_tests COMMAND open_gallery_tests)
+
+    add_executable(open_gallery_grid_tests tests/test_grid.cpp)
+    target_link_libraries(open_gallery_grid_tests PRIVATE open_gallery)
+    add_test(NAME open_gallery_grid_tests COMMAND open_gallery_grid_tests)
 endif()

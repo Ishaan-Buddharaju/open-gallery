@@ -52,8 +52,12 @@ Layout generateGridLayout(const std::vector<ImageMeta>& images, uint16_t display
         for (int c = 0; c < itemsInRow; c++) {
             float x0 = c * cellWidthPx;
             float y0 = r * cellHeightPx;
-            float x1 = x0 + cellWidthPx;
-            float y1 = y0 + cellHeightPx;
+            // Share internal boundaries and pin outer edges to the display to
+            // avoid floating-point overshoot rejected by Region validation.
+            float x1 = c + 1 == itemsInRow ? static_cast<float>(displayWidthPx)
+                                          : (c + 1) * cellWidthPx;
+            float y1 = r + 1 == rows ? static_cast<float>(displayHeightPx)
+                                    : (r + 1) * cellHeightPx;
 
             /* Region's constructor normalizes these pixel coordinates against the
              * display dimensions, matching how ImageMeta::subject_ is normalized. */
