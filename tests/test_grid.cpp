@@ -19,7 +19,7 @@ void assertRect(Region region, float x0, float y0, float x1, float y1) {
 
 void testSingleImageFillsDisplay() {
     std::vector<ImageMeta> images{ImageMeta(20, 300)};
-    auto layout = generateGridLayout(images, 1920, 1080);
+    auto layout = generateRowGridLayout(images, 1920, 1080);
     assert(layout.placements().size() == 1);
     assert(layout.placements()[0].image == &images[0]);
     assertRect(layout.placements()[0].region, 0, 0, 1, 1);
@@ -30,7 +30,7 @@ void testSquareGrid() {
     std::vector<ImageMeta> images{
         ImageMeta(100, 100), ImageMeta(400, 100),
         ImageMeta(100, 400), ImageMeta(300, 200)};
-    auto layout = generateGridLayout(images, 600, 600);
+    auto layout = generateRowGridLayout(images, 600, 600);
     auto& cells = layout.placements();
     assert(cells.size() == 4);
     assertRect(cells[0].region, 0, 0, 0.5F, 0.5F);
@@ -41,7 +41,7 @@ void testSquareGrid() {
 
 void testIncompleteRowFillsWidth() {
     std::vector<ImageMeta> images(5, ImageMeta(100, 100));
-    auto layout = generateGridLayout(images, 900, 600);
+    auto layout = generateRowGridLayout(images, 900, 600);
     auto& cells = layout.placements();
     assert(cells.size() == 5);
     assertRect(cells[0].region, 0, 0, 1.0F / 3, 0.5F);
@@ -53,8 +53,8 @@ void testIncompleteRowFillsWidth() {
 
 void testExtremeDisplayShapes() {
     std::vector<ImageMeta> images(4, ImageMeta(100, 100));
-    auto wide = generateGridLayout(images, 65535, 1);
-    auto tall = generateGridLayout(images, 1, 65535);
+    auto wide = generateRowGridLayout(images, 65535, 1);
+    auto tall = generateRowGridLayout(images, 1, 65535);
     assert(wide.placements().size() == 4);
     assert(tall.placements().size() == 4);
     for (size_t i = 0; i < images.size(); ++i) {
@@ -75,7 +75,7 @@ void testGridInvariants() {
             std::cerr << "Grid: " << count << " images, " << display.width
                       << 'x' << display.height << '\n';
             std::vector<ImageMeta> images(count, ImageMeta(320, 240));
-            auto layout = generateGridLayout(images, display.width, display.height);
+            auto layout = generateRowGridLayout(images, display.width, display.height);
             assert(layout.widthPx() == display.width);
             assert(layout.heightPx() == display.height);
             auto& cells = layout.placements();

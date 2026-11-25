@@ -66,7 +66,7 @@ void testImageMetaMaintainsAspectRatio() {
 
 void testGridHandlesEmptyImages() {
     std::vector<ImageMeta> images;
-    Layout layout = generateGridLayout(images, 400, 200);
+    Layout layout = generateRowGridLayout(images, 400, 200);
 
     assert(layout.widthPx() == 400);
     assert(layout.heightPx() == 200);
@@ -82,7 +82,7 @@ void testGridPlacesImagesInNormalizedRegions() {
         ImageMeta(100, 100),
     };
 
-    Layout layout = generateGridLayout(images, 400, 200);
+    Layout layout = generateRowGridLayout(images, 400, 200);
     auto& placements = layout.placements();
 
     assert(placements.size() == images.size());
@@ -105,11 +105,11 @@ void testGridRejectsInvalidDisplayDimensions() {
     std::vector<ImageMeta> images{ImageMeta(100, 100)};
 
     assertThrowsInvalidArgument([&] {
-        generateGridLayout(images, 0, 100);
+        generateRowGridLayout(images, 0, 100);
     });
 
     assertThrowsInvalidArgument([&] {
-        generateGridLayout(images, 100, 0);
+        generateRowGridLayout(images, 100, 0);
     });
 }
 

@@ -11,15 +11,15 @@
 // }
 
 /*
- * generateGridLayout(images, displayWidthPx, displayHeightPx)
+ * generateRowGridLayout(images, displayWidthPx, displayHeightPx)
  *
- * Splits the display into a uniform grid of cells, one per image, and returns a Layout
+ * Splits the display into equal-height rows, one cell per image, and returns a Layout
  * pairing each image with the Region of its cell. Cells are sized to fully cover their
  * row (crop-to-cell) rather than being shrunk/letterboxed to preserve each image's own
  * aspect ratio; deciding which part of the source image to crop (e.g. protecting
  * ImageMeta::subject()) is left to rendering, not this generator.
  */
-Layout generateGridLayout(const std::vector<ImageMeta>& images, uint16_t displayWidthPx, uint16_t displayHeightPx) {
+Layout generateRowGridLayout(const std::vector<ImageMeta>& images, uint16_t displayWidthPx, uint16_t displayHeightPx) {
     if (displayWidthPx <= 0 || displayHeightPx <= 0) {
         throw std::invalid_argument("Invalid display dimensions");
     }
