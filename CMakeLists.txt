@@ -9,3 +9,13 @@ add_library(open_gallery
 )
 
 target_include_directories(open_gallery PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+include(CTest)
+
+if(BUILD_TESTING)
+    add_executable(open_gallery_tests
+        tests/test_open_gallery.cpp
+    )
+    target_link_libraries(open_gallery_tests PRIVATE open_gallery)
+    add_test(NAME open_gallery_tests COMMAND open_gallery_tests)
+endif()
